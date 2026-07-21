@@ -76,6 +76,49 @@ function wrapText(text: string, font: PDFFont, fontSize: number, maxWidth: numbe
   return lines;
 }
 
+function fitTextToBox(options: {
+  text: string;
+  font: PDFFont;
+  preferredSize: number;
+  minimumSize: number;
+  maxWidth: number;
+  maxHeight: number;
+  multiline: boolean;
+  autoFit: boolean;
+}) {
+  const { text, font, preferredSize, minimumSize, maxWidth, maxHeight, multiline, autoFit } = options;
+  const preferred = Math.max(3, preferredSize);
+  const minimum = Math.max(2.5, Math.min(minimumSize, preferred));
+
+  const calculate = (fontSize: number) => {
+    const lines = multiline ? wrapText(text, font, fontSize, maxWidth) : [text];
+    const lineHeight = fontSize * 1.12;
+    const widthFits = lines.every((line) => font.widthOfTextAtSize(line, fontSize) <= maxWidth + 0.5);
+    const heightFits = lines.length * lineHeight <= maxHeight + 0.5;
+    return { lines, lineHeight, fits: widthFits && heightFits };
+  };
+
+  if (!autoFit) {
+    const calculated = calculate(preferred);
+    return { fontSize: preferred, lines: calculated.lines, lineHeight: calculated.lineHeight };
+  }
+
+  let low = minimum;
+  let high = preferred;
+  let best = minimum;
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    const current = (low + high) / 2;
+    if (calculate(current).fits) {
+      best = current;
+      low = current;
+    } else {
+      high = current;
+    }
+  }
+  const final = calculate(best);
+  return { fontSize: best, lines: final.lines, lineHeight: final.lineHeight };
+}
+
 async function embedRaster(pdf: PDFDocument, bytes: Uint8Array, path = '') {
   if (/\.jpe?g$/i.test(path)) return pdf.embedJpg(bytes);
   try {
@@ -112,6 +155,7 @@ async function drawDynamicSide(options: {
     const boxHeight = height * (Number(field.height) / 100);
     const y = height - height * (Number(field.y) / 100) - boxHeight;
     const style = field.style || {};
+    const validation = field.validation || {};
 
     if (field.field_type === 'image') {
       if (photoImage && field.technical_name === 'beneficiary.photo') {
@@ -128,21 +172,35 @@ async function drawDynamicSide(options: {
     let text = field.field_type === 'fixed_text'
       ? String(style.fixedText || style.placeholder || '-')
       : resolveValue(field.technical_name, context);
+    const maxLength = Number(validation.maxLength || 0);
+    if (maxLength > 0 && text.length > maxLength) text = text.slice(0, maxLength);
     if (style.uppercase !== false) text = text.toUpperCase();
 
-    const fontSize = Math.max(3.5, Math.min(24, width * (Number(style.fontSize || 2.1) / 100)));
+    const preferredSize = Math.max(3.5, Math.min(28, width * (Number(style.fontSize || 2.1) / 100)));
+    const minimumSize = Math.max(2.5, Math.min(preferredSize, width * (Number(style.minFontSize || 0.8) / 100)));
+    const fitted = fitTextToBox({
+      text,
+      font,
+      preferredSize,
+      minimumSize,
+      maxWidth: boxWidth,
+      maxHeight: boxHeight,
+      multiline: style.multiline === true,
+      autoFit: style.autoFit !== false,
+    });
     const color = parseColor(style.color);
-    const lines = style.multiline ? wrapText(text, font, fontSize, boxWidth) : [text];
-    const lineHeight = fontSize * 1.12;
-    const maxLines = Math.max(1, Math.floor(boxHeight / lineHeight));
+    const maxLines = Math.max(1, Math.floor(boxHeight / fitted.lineHeight));
+    const visibleLines = fitted.lines.slice(0, maxLines);
+    const totalHeight = visibleLines.length * fitted.lineHeight;
+    const firstBaseline = y + Math.max(fitted.fontSize, (boxHeight + totalHeight) / 2 - fitted.fontSize * 0.15);
 
-    lines.slice(0, maxLines).forEach((line, index) => {
-      const textWidth = font.widthOfTextAtSize(line, fontSize);
+    visibleLines.forEach((line, index) => {
+      const textWidth = font.widthOfTextAtSize(line, fitted.fontSize);
       let textX = x;
       if (style.align === 'center') textX = x + Math.max(0, (boxWidth - textWidth) / 2);
       if (style.align === 'right') textX = x + Math.max(0, boxWidth - textWidth);
-      const textY = y + boxHeight - fontSize - index * lineHeight;
-      page.drawText(line, { x: textX, y: textY, size: fontSize, font, color, maxWidth: boxWidth });
+      const textY = firstBaseline - fitted.fontSize - index * fitted.lineHeight;
+      page.drawText(line, { x: textX, y: textY, size: fitted.fontSize, font, color, maxWidth: boxWidth });
     });
   }
 }
@@ -303,16 +361,19 @@ Deno.serve(async (req) => {
       const height = 376;
       const front = pdf.addPage([width, height]);
       front.drawImage(frontBackground, { x: 0, y: 0, width, height });
-      const drawFront = (text: string, x: number, y: number, size = 6, maxWidth?: number) =>
-        front.drawText((text || '-').toUpperCase(), { x, y, size, font, color: navy, maxWidth });
+      const drawFront = (text: string, x: number, y: number, preferred = 6, maxWidth = 190) => {
+        const value = (text || '-').toUpperCase();
+        const fitted = fitTextToBox({ text: value, font, preferredSize: preferred, minimumSize: 3.5, maxWidth, maxHeight: preferred * 1.4, multiline: false, autoFit: true });
+        front.drawText(value, { x, y, size: fitted.fontSize, font, color: navy, maxWidth });
+      };
       drawFront(application.beneficiary.full_name, 44, 120, 6.6, 188);
-      drawFront(formatDate(application.beneficiary.birth_date), 106, 108, 6);
-      drawFront(String(application.beneficiary.sex || '').slice(0, 1), 202, 108, 6);
+      drawFront(formatDate(application.beneficiary.birth_date), 106, 108, 6, 70);
+      drawFront(String(application.beneficiary.sex || '').slice(0, 1), 202, 108, 6, 20);
       drawFront(parentages?.[0]?.full_name || '-', 35, 87, 5.7, 198);
       drawFront(parentages?.[1]?.full_name || '-', 35, 73, 5.7, 198);
       drawFront(cardNumber, 68, 56, 5.4, 66);
       drawFront(application.beneficiary.sus_number, 168, 56, 5.4, 67);
-      drawFront(formatDate(issued), 75, 43, 5.4);
+      drawFront(formatDate(issued), 75, 43, 5.4, 65);
       drawFront(application.beneficiary.cid, 166, 43, 5.4, 70);
       drawFront(`NIVEL ${application.beneficiary.support_level}`, 98, 29, 5.4, 135);
       if (photoBytes) {
@@ -325,14 +386,17 @@ Deno.serve(async (req) => {
       }
       const back = pdf.addPage([width, height]);
       back.drawImage(backBackground, { x: 0, y: 0, width, height });
-      const drawBack = (text: string, x: number, y: number, size = 6, maxWidth?: number) =>
-        back.drawText((text || '-').toUpperCase(), { x, y, size, font, color: navy, maxWidth });
+      const drawBack = (text: string, x: number, y: number, preferred = 6, maxWidth = 180) => {
+        const value = (text || '-').toUpperCase();
+        const fitted = fitTextToBox({ text: value, font, preferredSize: preferred, minimumSize: 3.2, maxWidth, maxHeight: preferred * 1.4, multiline: false, autoFit: true });
+        back.drawText(value, { x, y, size: fitted.fontSize, font, color: navy, maxWidth });
+      };
       drawBack(caregiver?.full_name || '-', 44, 286, 6.2, 180);
       drawBack(caregiver?.phone || '-', 54, 269, 6.2, 170);
       drawBack(caregiver?.relationship || '-', 61, 253, 6.2, 164);
-      drawBack(emergency?.blood_type || '-', 67, 211, 6);
-      drawBack((emergency?.allergies || 'NAO INFORMADO').slice(0, 50), 96, 195, 5.2, 132);
-      drawBack((emergency?.other_information || '-').slice(0, 55), 88, 179, 5.2, 140);
+      drawBack(emergency?.blood_type || '-', 67, 211, 6, 70);
+      drawBack(emergency?.allergies || 'NAO INFORMADO', 96, 195, 5.2, 132);
+      drawBack(emergency?.other_information || '-', 88, 179, 5.2, 140);
       drawBack(formatDate(issued), 155, 139, 5.8, 48);
       const qrImage = await pdf.embedPng(qrBytes);
       back.drawImage(qrImage, { x: 132, y: 38, width: 94, height: 82 });
