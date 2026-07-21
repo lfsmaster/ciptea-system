@@ -8,10 +8,10 @@ export function InitialSetupPage() {
       <div className="mx-auto max-w-[1700px] space-y-6">
         <header className="rounded-2xl bg-brand-900 px-6 py-7 text-white shadow-card">
           <p className="text-sm font-semibold uppercase tracking-[0.18em] text-blue-200">Configuração inicial inteligente</p>
-          <h1 className="mt-2 text-3xl font-black">Envie o arquivo e deixe o sistema identificar os campos</h1>
-          <p className="mt-3 max-w-4xl text-sm leading-6 text-blue-100">
-            O sistema preserva a arte original, executa OCR em português, reconhece os rótulos, cria os campos de preenchimento,
-            aplica critérios de validação e ativa o ajuste automático das fontes. Depois, basta revisar o resultado e salvar o modelo.
+          <h1 className="mt-2 text-3xl font-black">Envie o documento e deixe o sistema reconstruir sua estrutura de preenchimento</h1>
+          <p className="mt-3 max-w-5xl text-sm leading-6 text-blue-100">
+            O sistema preserva a arte original, identifica linhas, caixas, divisões, áreas vazias e limites de cada seção, executa OCR em português,
+            reconhece os rótulos e encaixa os campos na área real disponível. Os critérios de validação e os tamanhos das fontes também são calculados automaticamente.
           </p>
         </header>
 
@@ -22,10 +22,10 @@ export function InitialSetupPage() {
             <div className="flex items-start gap-3">
               <ScanSearch className="mt-0.5 text-brand-700" />
               <div>
-                <h2 className="text-lg font-bold">Identificação automática</h2>
+                <h2 className="text-lg font-bold">Leitura da estrutura real</h2>
                 <p className="mt-2 text-sm leading-6 text-slate-700">
-                  A leitura procura nome, nascimento, sexo, filiação, SUS, CID, nível de suporte, responsável, telefone,
-                  dados de emergência, fotografia e QR Code. Campos não reconhecidos podem ser acrescentados manualmente.
+                  O mecanismo procura bordas, linhas horizontais e verticais, células, subáreas, espaços de fotografia, QR Code e regiões livres.
+                  Cada campo é limitado pelos separadores encontrados para não invadir outras partes da arte.
                 </p>
               </div>
             </div>
@@ -35,10 +35,10 @@ export function InitialSetupPage() {
             <div className="flex items-start gap-3">
               <Sparkles className="mt-0.5 text-amber-600" />
               <div>
-                <h2 className="text-lg font-bold">Fontes adaptáveis</h2>
+                <h2 className="text-lg font-bold">Área e fonte adaptáveis</h2>
                 <p className="mt-2 text-sm leading-6 text-slate-700">
-                  O sistema começa no tamanho máximo configurado e reduz a fonte somente quando necessário, respeitando o limite mínimo,
-                  a largura, a altura e a quantidade de linhas de cada campo.
+                  O sistema decide se o conteúdo deve ficar à direita, abaixo, sobre uma linha de preenchimento ou dentro de uma célula específica.
+                  Depois calcula o maior tamanho de fonte que cabe integralmente na largura e na altura disponíveis.
                 </p>
               </div>
             </div>
