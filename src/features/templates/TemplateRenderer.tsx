@@ -1,5 +1,5 @@
 import { QRCodeSVG } from 'qrcode.react';
-import type { CSSProperties } from 'react';
+import { useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import type { CardTemplateDefinition, TemplateField, TemplateSide } from './types';
 
 interface TemplateRendererProps {
@@ -11,7 +11,7 @@ interface TemplateRendererProps {
   editMode?: boolean;
   selectedFieldId?: string;
   onSelectField?: (fieldId: string) => void;
-  onPointerDown?: (event: React.PointerEvent<HTMLElement>, field: TemplateField, action: 'move' | 'resize') => void;
+  onPointerDown?: (event: ReactPointerEvent<HTMLElement>, field: TemplateField, action: 'move' | 'resize') => void;
 }
 
 function fieldText(field: TemplateField, values: Record<string, string | undefined>) {
@@ -20,18 +20,85 @@ function fieldText(field: TemplateField, values: Record<string, string | undefin
   return field.uppercase ? value.toUpperCase() : value;
 }
 
-function textStyle(field: TemplateField): CSSProperties {
+function baseTextStyle(field: TemplateField): CSSProperties {
   return {
     color: field.color,
-    fontSize: `${field.fontSize}cqw`,
     fontWeight: field.fontWeight,
     textAlign: field.align,
     lineHeight: field.multiline ? 1.12 : 1,
     whiteSpace: field.multiline ? 'normal' : 'nowrap',
     overflow: 'hidden',
-    textOverflow: field.multiline ? 'clip' : 'ellipsis',
     wordBreak: field.multiline ? 'break-word' : 'normal',
   };
+}
+
+function AutoFitText({ field, text }: { field: TemplateField; text: string }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [fontSize, setFontSize] = useState(`${field.fontSize}cqw`);
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    const content = container?.firstElementChild as HTMLElement | null;
+    if (!container || !content) return;
+    let animationFrame = 0;
+
+    const fit = () => {
+      const template = container.closest('[data-template-side]') as HTMLElement | null;
+      const templateWidth = template?.clientWidth || container.clientWidth || 320;
+      const preferred = Math.max(4, templateWidth * (Number(field.fontSize || 2.1) / 100));
+      const minimum = Math.max(3, templateWidth * (Number(field.minFontSize ?? 0.8) / 100));
+
+      if (field.autoFit === false) {
+        const next = `${preferred}px`;
+        container.style.fontSize = next;
+        setFontSize(next);
+        return;
+      }
+
+      let low = Math.min(minimum, preferred);
+      let high = Math.max(minimum, preferred);
+      let best = low;
+
+      for (let attempt = 0; attempt < 14; attempt += 1) {
+        const current = (low + high) / 2;
+        container.style.fontSize = `${current}px`;
+        const fitsWidth = content.scrollWidth <= container.clientWidth + 1;
+        const fitsHeight = content.scrollHeight <= container.clientHeight + 1;
+        if (fitsWidth && fitsHeight) {
+          best = current;
+          low = current;
+        } else {
+          high = current;
+        }
+      }
+
+      const next = `${Math.max(minimum, best).toFixed(2)}px`;
+      container.style.fontSize = next;
+      setFontSize(next);
+    };
+
+    const scheduleFit = () => {
+      cancelAnimationFrame(animationFrame);
+      animationFrame = requestAnimationFrame(fit);
+    };
+
+    scheduleFit();
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(scheduleFit) : undefined;
+    observer?.observe(container);
+    const template = container.closest('[data-template-side]');
+    if (template instanceof HTMLElement) observer?.observe(template);
+
+    return () => {
+      cancelAnimationFrame(animationFrame);
+      observer?.disconnect();
+    };
+  }, [field.autoFit, field.fontSize, field.minFontSize, field.multiline, field.width, field.height, text]);
+
+  return (
+    <div ref={containerRef} className="flex h-full w-full items-center" style={{ ...baseTextStyle(field), fontSize }}>
+      <span className="block w-full">{text}</span>
+    </div>
+  );
 }
 
 export function TemplateRenderer({
@@ -76,7 +143,7 @@ export function TemplateRenderer({
           width: `${field.width}%`,
           height: `${field.height}%`,
         };
-        const commonClass = `absolute flex min-w-0 items-center ${editMode ? 'cursor-move select-none' : ''} ${selected ? 'z-20 ring-2 ring-sky-500 ring-offset-1' : editMode ? 'z-10 ring-1 ring-sky-400/80' : ''}`;
+        const commonClass = `absolute flex min-w-0 items-center overflow-hidden ${editMode ? 'cursor-move select-none' : ''} ${selected ? 'z-20 ring-2 ring-sky-500 ring-offset-1' : editMode ? 'z-10 ring-1 ring-sky-400/80' : ''}`;
 
         return (
           <div
@@ -95,6 +162,7 @@ export function TemplateRenderer({
             role={editMode ? 'button' : undefined}
             tabIndex={editMode ? 0 : undefined}
             aria-label={editMode ? `Editar campo ${field.label}` : undefined}
+            title={field.autoDetected ? `Detectado automaticamente (${Math.round(field.detectionConfidence || 0)}%)` : undefined}
           >
             {field.type === 'image' ? (
               photoUrl ? (
@@ -115,9 +183,7 @@ export function TemplateRenderer({
                 </div>
               )
             ) : (
-              <div className="w-full" style={textStyle(field)}>
-                {fieldText(field, values)}
-              </div>
+              <AutoFitText field={field} text={fieldText(field, values)} />
             )}
 
             {editMode && selected && (
