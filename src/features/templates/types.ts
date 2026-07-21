@@ -2,6 +2,7 @@ export type TemplateSide = 'front' | 'back';
 export type TemplateFieldType = 'text' | 'image' | 'qrcode' | 'fixed_text';
 export type TemplateTextAlign = 'left' | 'center' | 'right';
 export type TemplateFieldFormat = 'plain' | 'date' | 'phone' | 'sus' | 'cid' | 'single_character' | 'card_number' | 'support_level';
+export type TemplatePlacementStrategy = 'underline' | 'cell-right' | 'cell-below' | 'nearby-cell' | 'free-space' | 'manual';
 
 export interface TemplateBackground {
   dataUrl: string;
@@ -34,6 +35,8 @@ export interface TemplateField {
   format?: TemplateFieldFormat;
   autoDetected?: boolean;
   detectionConfidence?: number;
+  structureConfidence?: number;
+  placementStrategy?: TemplatePlacementStrategy;
   detectedLabel?: string;
   fixedText?: string;
   placeholder?: string;
