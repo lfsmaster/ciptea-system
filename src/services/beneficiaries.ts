@@ -1,0 +1,5 @@
+import { requireSupabase } from '../lib/supabase';
+import type { Beneficiary } from '../types/domain';
+export async function listBeneficiaries(search=''){const sb=requireSupabase();let query=sb.from('beneficiaries').select('*').is('deleted_at',null).order('created_at',{ascending:false}).limit(100);if(search)query=query.ilike('full_name',`%${search}%`);const{data,error}=await query;if(error)throw error;return data as Beneficiary[];}
+export async function getBeneficiary(id:string){const{data,error}=await requireSupabase().from('beneficiaries').select('*, parentages(*), caregivers(*), emergency_information(*)').eq('id',id).single();if(error)throw error;return data;}
+export async function saveBeneficiary(input:Record<string,unknown>,id?:string){const sb=requireSupabase();if(id){const{data,error}=await sb.from('beneficiaries').update(input).eq('id',id).select().single();if(error)throw error;return data;}const{data,error}=await sb.from('beneficiaries').insert(input).select().single();if(error)throw error;return data;}

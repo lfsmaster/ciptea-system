@@ -1,0 +1,1 @@
+import { Link } from 'react-router-dom';import { Button } from '../components/ui';export function NotFoundPage(){return <main className="grid min-h-screen place-items-center text-center"><div><h1 className="text-7xl font-black text-brand-900">404</h1><p className="my-4 text-slate-600">Página não encontrada.</p><Link to="/"><Button>Voltar</Button></Link></div></main>}

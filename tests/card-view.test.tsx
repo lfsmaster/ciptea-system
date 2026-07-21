@@ -1,0 +1,3 @@
+import { render,screen } from '@testing-library/react';import { describe,it,expect } from 'vitest';import { CardFront } from '../src/features/cards/CardViews';
+const beneficiary={id:'1',full_name:'Pessoa de Teste',birth_date:'2015-01-01',sex:'Feminino',sus_number:'123456789012345',city:'Cidade',state:'RO',cid:'F84.0',support_level:'2',created_at:'2026-01-01',updated_at:'2026-01-01'};
+describe('CardFront',()=>{it('renderiza os dados principais',()=>{render(<CardFront beneficiary={beneficiary}/>);expect(screen.getByText('Pessoa de Teste')).toBeInTheDocument();expect(screen.getByText('F84.0')).toBeInTheDocument();});});

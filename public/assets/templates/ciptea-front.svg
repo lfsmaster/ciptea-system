@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="954" height="1476" viewBox="0 0 954 1476">
+  <rect width="954" height="1476" fill="#eaf6ff"/>
+  <path d="M0 0H954V190C954 253 903 304 840 304H0Z" fill="#072f73"/>
+  <text x="75" y="125" font-family="Arial, sans-serif" font-size="76" font-weight="700" fill="#fff">SEMAS</text>
+  <text x="75" y="170" font-family="Arial, sans-serif" font-size="23" font-weight="700" fill="#fff">SECRETARIA MUNICIPAL DE ASSISTÊNCIA SOCIAL</text>
+  <text x="477" y="375" text-anchor="middle" font-family="Arial, sans-serif" font-size="76" font-weight="900" fill="#073b82">CIPTEA</text>
+  <text x="477" y="435" text-anchor="middle" font-family="Arial, sans-serif" font-size="34" font-weight="800" fill="#073b82">CARTEIRA DE IDENTIFICAÇÃO DA PESSOA COM</text>
+  <text x="477" y="485" text-anchor="middle" font-family="Arial, sans-serif" font-size="34" font-weight="800" fill="#073b82">TRANSTORNO DO ESPECTRO AUTISTA</text>
+  <rect x="324" y="520" width="306" height="424" rx="22" fill="#fff" stroke="#1d2939" stroke-width="3"/>
+  <text x="477" y="730" text-anchor="middle" font-family="Arial, sans-serif" font-size="42" fill="#222">FOTO</text>
+  <text x="477" y="780" text-anchor="middle" font-family="Arial, sans-serif" font-size="42" fill="#222">3X4</text>
+  <g font-family="Arial, sans-serif" font-size="31" font-weight="800" fill="#073b82">
+    <text x="68" y="1023">NOME:</text>
+    <text x="68" y="1073">DATA DE NASCIMENTO:</text><text x="650" y="1073">SEXO:</text>
+    <text x="68" y="1123">FILIAÇÃO</text>
+    <text x="68" y="1243">CIPTEA Nº:</text><text x="520" y="1243">SUS Nº:</text>
+    <text x="68" y="1293">EXPEDIÇÃO:</text><text x="520" y="1293">CID:</text>
+    <text x="68" y="1343">NÍVEL DE SUPORTE:</text>
+  </g>
+  <g fill="#fff" stroke="#243b53" stroke-width="3">
+    <rect x="195" y="982" width="715" height="48" rx="10"/>
+    <rect x="430" y="1032" width="210" height="48" rx="10"/><rect x="745" y="1032" width="165" height="48" rx="10"/>
+    <rect x="68" y="1136" width="842" height="48" rx="10"/><rect x="68" y="1190" width="842" height="48" rx="10"/>
+    <rect x="244" y="1204" width="285" height="48" rx="10"/><rect x="655" y="1204" width="255" height="48" rx="10"/>
+    <rect x="250" y="1254" width="270" height="48" rx="10"/><rect x="604" y="1254" width="306" height="48" rx="10"/>
+    <rect x="390" y="1304" width="520" height="48" rx="10"/>
+  </g>
+  <text x="477" y="1425" text-anchor="middle" font-family="Arial, sans-serif" font-size="35" font-weight="900" text-decoration="underline" fill="#073b82">VÁLIDO POR 5 ANOS</text>
+  <g fill="#ed1c24"><rect x="0" y="1370" width="38" height="38"/><rect x="38" y="1408" width="38" height="38"/></g>
+  <g fill="#00aeef"><rect x="0" y="1408" width="38" height="38"/><rect x="76" y="1370" width="38" height="38"/></g>
+  <g fill="#ffd21f"><rect x="38" y="1370" width="38" height="38"/></g>
+  <g fill="#ed1c24"><rect x="878" y="1408" width="38" height="38"/><rect x="916" y="1370" width="38" height="38"/></g>
+</svg>

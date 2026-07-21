@@ -1,0 +1,1 @@
+import { test,expect } from '@playwright/test';test('abre a página pública',async({page})=>{await page.goto('/#/verificar/token-invalido');await expect(page.getByText('Autenticação CIPTEA')).toBeVisible();});

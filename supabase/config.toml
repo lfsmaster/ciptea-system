@@ -1,0 +1,7 @@
+project_id = "ciptea-system"
+[functions.verify-card]
+verify_jwt = false
+[functions.issue-card]
+verify_jwt = true
+[functions.revoke-card]
+verify_jwt = true

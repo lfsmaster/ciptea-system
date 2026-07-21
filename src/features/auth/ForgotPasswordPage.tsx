@@ -1,0 +1,5 @@
+import { useState, type FormEvent } from 'react';
+import { Button, Card, Field, Input } from '../../components/ui';
+import { supabase } from '../../lib/supabase';
+import { env } from '../../lib/env';
+export function ForgotPasswordPage() { const [email,setEmail]=useState(''); const [message,setMessage]=useState(''); async function submit(e:FormEvent){e.preventDefault(); if(!supabase)return; const {error}=await supabase.auth.resetPasswordForEmail(email,{redirectTo:`${env.publicAppUrl}#/redefinir-senha`}); setMessage(error?error.message:'Verifique seu e-mail para continuar.');} return <main className="grid min-h-screen place-items-center bg-slate-100 p-4"><Card className="w-full max-w-md"><h1 className="text-xl font-bold">Recuperar senha</h1><p className="mb-5 mt-1 text-sm text-slate-600">Enviaremos um link seguro para seu e-mail.</p><form className="space-y-4" onSubmit={submit}><Field label="E-mail"><Input type="email" required value={email} onChange={e=>setEmail(e.target.value)}/></Field>{message&&<p className="rounded-lg bg-slate-100 p-3 text-sm">{message}</p>}<Button className="w-full">Enviar link</Button></form></Card></main>; }
