@@ -1,4 +1,17 @@
-import { FIELD_PRESETS, type CardTemplateDefinition, type TemplateBackground, type TemplateField, type TemplateFieldPreset, type TemplateSide } from './types';
+import {
+  analyzeDocumentStructure,
+  placeFieldInDocument,
+  type DocumentStructure,
+  type TextRegion,
+} from './documentStructure';
+import {
+  FIELD_PRESETS,
+  type CardTemplateDefinition,
+  type TemplateBackground,
+  type TemplateField,
+  type TemplateFieldPreset,
+  type TemplateSide,
+} from './types';
 
 export interface DetectionProgress {
   status: string;
@@ -8,16 +21,13 @@ export interface DetectionProgress {
 export interface DetectionResult {
   fields: TemplateField[];
   recognizedText: Partial<Record<TemplateSide, string>>;
+  structureConfidence: Partial<Record<TemplateSide, number>>;
   warnings: string[];
 }
 
-interface OcrLine {
+interface OcrLine extends TextRegion {
   text: string;
   normalized: string;
-  left: number;
-  top: number;
-  right: number;
-  bottom: number;
   confidence: number;
 }
 
@@ -124,45 +134,38 @@ function findPreset(key: string, side: TemplateSide): TemplateFieldPreset | unde
     || FIELD_PRESETS.find((preset) => preset.key === key);
 }
 
-function fieldBox(line: OcrLine, background: TemplateBackground, preset: TemplateFieldPreset) {
-  const labelLeft = (line.left / background.width) * 100;
-  const labelRight = (line.right / background.width) * 100;
-  const labelTop = (line.top / background.height) * 100;
-  const labelBottom = (line.bottom / background.height) * 100;
-  const labelHeight = Math.max(1.5, labelBottom - labelTop);
-  const rightStart = clamp(labelRight + 1.2, 3, 94);
-  const rightSpace = 96 - rightStart;
-
-  if (preset.type === 'image' || preset.type === 'qrcode') {
-    const width = clamp(rightSpace >= 20 ? Math.min(30, rightSpace) : 25, 16, 34);
-    const height = preset.type === 'image' ? clamp(width * 1.22, 20, 38) : clamp(width, 16, 31);
-    const x = rightSpace >= 20 ? rightStart : clamp(labelLeft, 4, 96 - width);
-    const y = rightSpace >= 20 ? clamp(labelTop - labelHeight * 0.5, 1, 99 - height) : clamp(labelBottom + 1, 1, 99 - height);
-    return { x: round(x), y: round(y), width: round(width), height: round(height) };
-  }
-
-  const useRight = rightSpace >= 22;
-  const x = useRight ? rightStart : clamp(labelLeft, 4, 80);
-  const y = useRight ? clamp(labelTop - labelHeight * 0.18, 0.5, 95) : clamp(labelBottom + 0.45, 0.5, 95);
-  const width = useRight ? rightSpace : clamp(96 - x, 20, 92);
-  const multiline = preset.multiline === true;
-  const height = multiline ? clamp(labelHeight * 3.1, 6, 12) : clamp(labelHeight * 1.65, 3, 6.5);
-  return { x: round(x), y: round(y), width: round(width), height: round(Math.min(height, 99 - y)) };
+function suggestedFontSize(preset: TemplateFieldPreset, width: number, height: number) {
+  if (preset.type !== 'text' && preset.type !== 'fixed_text') return { maximum: 2.1, minimum: 0.8 };
+  const expectedLength = Math.max(4, Math.min(preset.maxLength ?? preset.placeholder.length, Math.max(preset.placeholder.length, 36)));
+  const widthLimit = clamp((width * 2.5) / Math.sqrt(expectedLength), 1.25, 3.1);
+  const heightLimit = clamp(height * (preset.multiline ? 0.24 : 0.48), 1.2, 3.2);
+  const maximum = round(Math.min(widthLimit, heightLimit, preset.multiline ? 2.15 : 3.05));
+  const minimum = round(clamp(maximum * (preset.multiline ? 0.34 : 0.38), 0.55, 1.05));
+  return { maximum, minimum };
 }
 
-function createDetectedField(rule: DetectionRule, line: OcrLine, background: TemplateBackground): TemplateField | null {
+function createDetectedField(
+  rule: DetectionRule,
+  line: OcrLine,
+  structure: DocumentStructure,
+  allLines: OcrLine[],
+): TemplateField | null {
   const preset = findPreset(rule.key, rule.side);
   if (!preset) return null;
-  const box = fieldBox(line, background, preset);
+  const placement = placeFieldInDocument(line, preset, structure, allLines);
+  const font = suggestedFontSize(preset, placement.width, placement.height);
   return {
     id: id(),
     key: preset.key,
     label: preset.label,
     side: rule.side,
     type: preset.type,
-    ...box,
-    fontSize: preset.multiline ? 2 : 2.25,
-    minFontSize: preset.multiline ? 0.72 : 0.82,
+    x: placement.x,
+    y: placement.y,
+    width: placement.width,
+    height: placement.height,
+    fontSize: font.maximum,
+    minFontSize: font.minimum,
     autoFit: true,
     fontWeight: 700,
     color: '#07347a',
@@ -174,13 +177,42 @@ function createDetectedField(rule: DetectionRule, line: OcrLine, background: Tem
     maxLength: preset.maxLength,
     format: preset.format ?? 'plain',
     autoDetected: true,
-    detectionConfidence: round(line.confidence),
+    detectionConfidence: round(line.confidence * 0.68 + placement.confidence * 0.32),
+    structureConfidence: placement.confidence,
+    placementStrategy: placement.strategy,
     detectedLabel: line.text,
     placeholder: preset.placeholder,
   };
 }
 
-function detectFromLines(lines: OcrLine[], side: TemplateSide, background: TemplateBackground) {
+function intersectionRatio(a: TemplateField, b: TemplateField) {
+  const width = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
+  const height = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+  const intersection = width * height;
+  return intersection / Math.max(1, Math.min(a.width * a.height, b.width * b.height));
+}
+
+function removeAccidentalOverlaps(fields: TemplateField[]) {
+  const result: TemplateField[] = [];
+  for (const source of [...fields].sort((a, b) => a.y - b.y || a.x - b.x)) {
+    let field = { ...source };
+    for (const previous of result.filter((candidate) => candidate.side === field.side)) {
+      if (intersectionRatio(previous, field) < 0.22) continue;
+      const previousBottom = previous.y + previous.height;
+      const canMoveDown = previousBottom + 0.7 + field.height <= 99;
+      if (canMoveDown && Math.abs(previous.x - field.x) < Math.max(previous.width, field.width) * 0.55) {
+        field = { ...field, y: round(previousBottom + 0.7), structureConfidence: Math.max(10, (field.structureConfidence ?? 50) - 8) };
+      } else if (previous.x < field.x) {
+        const newWidth = field.x - previous.x - 0.7;
+        if (newWidth >= 5) result[result.indexOf(previous)] = { ...previous, width: round(newWidth) };
+      }
+    }
+    result.push(field);
+  }
+  return result;
+}
+
+function detectFromLines(lines: OcrLine[], side: TemplateSide, structure: DocumentStructure) {
   const candidates: Array<{ field: TemplateField; score: number }> = [];
   const sideRules = RULES.filter((rule) => rule.side === side);
 
@@ -192,8 +224,8 @@ function detectFromLines(lines: OcrLine[], side: TemplateSide, background: Templ
       selected = { rule, score };
     }
     if (!selected || selected.score < 35) continue;
-    const field = createDetectedField(selected.rule, line, background);
-    if (field) candidates.push({ field, score: selected.score });
+    const field = createDetectedField(selected.rule, line, structure, lines);
+    if (field) candidates.push({ field, score: selected.score + (field.structureConfidence ?? 0) * 0.12 });
   }
 
   const selectedFields = new Map<string, { field: TemplateField; score: number }>();
@@ -211,11 +243,11 @@ function detectFromLines(lines: OcrLine[], side: TemplateSide, background: Templ
     const uniqueKey = `front:${key}`;
     if (side !== 'front' || selectedFields.has(uniqueKey)) return;
     const rule: DetectionRule = { key, side: 'front', aliases: ['filiacao'] };
-    const field = createDetectedField(rule, line, background);
-    if (field) selectedFields.set(uniqueKey, { field, score: 40 + line.confidence * 0.2 });
+    const field = createDetectedField(rule, line, structure, lines);
+    if (field) selectedFields.set(uniqueKey, { field, score: 40 + line.confidence * 0.2 + (field.structureConfidence ?? 0) * 0.1 });
   });
 
-  return Array.from(selectedFields.values()).map((item) => item.field);
+  return removeAccidentalOverlaps(Array.from(selectedFields.values()).map((item) => item.field));
 }
 
 async function upscaleForOcr(background: TemplateBackground) {
@@ -249,15 +281,17 @@ export async function detectTemplateFields(
   let currentSide: TemplateSide = available[0];
   const worker = await tesseract.createWorker('por', tesseract.OEM.LSTM_ONLY, {
     logger: (event) => {
-      const base = available.indexOf(currentSide) / available.length;
+      const sideIndex = available.indexOf(currentSide);
+      const base = sideIndex / available.length;
       const slice = 1 / available.length;
-      const progress = clamp(base + Number(event.progress || 0) * slice, 0, 0.98);
-      onProgress?.({ status: event.status || 'Analisando o documento...', progress });
+      const progress = clamp(base + (0.18 + Number(event.progress || 0) * 0.65) * slice, 0, 0.96);
+      onProgress?.({ status: event.status || 'Lendo textos do documento...', progress });
     },
   });
 
   const fields: TemplateField[] = [];
   const recognizedText: Partial<Record<TemplateSide, string>> = {};
+  const structureConfidence: Partial<Record<TemplateSide, number>> = {};
   const warnings: string[] = [];
 
   try {
@@ -269,9 +303,23 @@ export async function detectTemplateFields(
 
     for (const side of available) {
       currentSide = side;
+      const sideIndex = available.indexOf(side);
+      const base = sideIndex / available.length;
+      const slice = 1 / available.length;
       const background = backgrounds[side];
       if (!background) continue;
-      onProgress?.({ status: `Lendo ${side === 'front' ? 'a frente' : 'o verso'}...`, progress: available.indexOf(side) / available.length });
+
+      onProgress?.({
+        status: `Mapeando linhas, caixas e áreas ${side === 'front' ? 'da frente' : 'do verso'}...`,
+        progress: base + 0.04 * slice,
+      });
+      const structure = await analyzeDocumentStructure(background);
+      structureConfidence[side] = structure.confidence;
+
+      onProgress?.({
+        status: `Lendo rótulos ${side === 'front' ? 'da frente' : 'do verso'}...`,
+        progress: base + 0.18 * slice,
+      });
       const prepared = await upscaleForOcr(background);
       const result = await (worker as unknown as {
         recognize: (image: string, options: Record<string, unknown>, output: Record<string, boolean>) => Promise<{ data: { text?: string; tsv?: string } }>;
@@ -284,14 +332,20 @@ export async function detectTemplateFields(
         right: line.right / prepared.scale,
         bottom: line.bottom / prepared.scale,
       }));
-      const detected = detectFromLines(scaledLines, side, background);
+
+      onProgress?.({
+        status: `Encaixando os campos na estrutura ${side === 'front' ? 'da frente' : 'do verso'}...`,
+        progress: base + 0.88 * slice,
+      });
+      const detected = detectFromLines(scaledLines, side, structure);
       fields.push(...detected);
       if (!detected.length) warnings.push(`Nenhum campo conhecido foi identificado ${side === 'front' ? 'na frente' : 'no verso'}.`);
+      if (structure.confidence < 35) warnings.push(`A estrutura ${side === 'front' ? 'da frente' : 'do verso'} possui poucos separadores visuais; revise as áreas sugeridas.`);
     }
   } finally {
     await worker.terminate();
   }
 
-  onProgress?.({ status: 'Detecção concluída.', progress: 1 });
-  return { fields, recognizedText, warnings };
+  onProgress?.({ status: 'Estrutura e campos analisados.', progress: 1 });
+  return { fields, recognizedText, structureConfidence, warnings };
 }
