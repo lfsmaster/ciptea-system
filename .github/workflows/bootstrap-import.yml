@@ -1,0 +1,50 @@
+name: Instalar sistema CIPTEA
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - bootstrap/READY
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bootstrap-ciptea-system
+  cancel-in-progress: false
+
+jobs:
+  instalar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar repositório
+        uses: actions/checkout@v4
+
+      - name: Reconstruir pacote
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f bootstrap/READY
+          test "$(find bootstrap -maxdepth 1 -type f -name 'part*' | wc -l)" -eq 13
+          cat bootstrap/part* | base64 --decode > /tmp/ciptea-system.tar.gz
+          gzip -t /tmp/ciptea-system.tar.gz
+
+      - name: Extrair projeto completo
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/ciptea-project
+          mkdir -p /tmp/ciptea-project
+          tar -xzf /tmp/ciptea-system.tar.gz -C /tmp/ciptea-project
+          rsync -a --delete --exclude='.git/' /tmp/ciptea-project/ ./
+
+      - name: Publicar projeto na branch main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: publicar sistema completo CIPTEA"
+          git push origin main
