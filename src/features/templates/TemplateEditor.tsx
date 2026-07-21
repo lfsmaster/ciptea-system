@@ -1,7 +1,8 @@
-import { CloudUpload, Download, FileJson, Plus, Save, Trash2, Upload } from 'lucide-react';
+import { CheckCircle2, CloudUpload, Download, FileJson, LoaderCircle, Plus, Save, ScanSearch, Sparkles, Trash2, Upload } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Button, Card, Field, Input, Select, Textarea } from '../../components/ui';
 import { useAuth } from '../auth/AuthProvider';
+import { detectTemplateFields, type DetectionProgress } from './autoDetection';
 import { processSingleFaceImage, processTemplateFile, type SourceSplitMode } from './fileProcessing';
 import { TemplateRenderer } from './TemplateRenderer';
 import { FIELD_PRESETS, SAMPLE_TEMPLATE_VALUES, type CardTemplateDefinition, type TemplateField, type TemplateFieldPreset, type TemplateSide } from './types';
@@ -18,13 +19,36 @@ function emptyTemplate(): CardTemplateDefinition {
 
 function fromPreset(preset: TemplateFieldPreset, side: TemplateSide): TemplateField {
   return {
-    id: id(), key: preset.key, label: preset.label, side, type: preset.type,
-    x: 8, y: 8, width: preset.type === 'qrcode' ? 28 : preset.type === 'image' ? 27 : 52,
-    height: preset.type === 'qrcode' ? 23 : preset.type === 'image' ? 30 : 5,
-    fontSize: 2.1, fontWeight: 700, color: '#07347a', align: 'left', uppercase: true,
-    multiline: false, visible: true, fixedText: preset.type === 'fixed_text' ? preset.placeholder : undefined,
+    id: id(),
+    key: preset.key,
+    label: preset.label,
+    side,
+    type: preset.type,
+    x: 8,
+    y: 8,
+    width: preset.type === 'qrcode' ? 28 : preset.type === 'image' ? 27 : 52,
+    height: preset.type === 'qrcode' ? 23 : preset.type === 'image' ? 30 : preset.multiline ? 8 : 5,
+    fontSize: preset.multiline ? 2 : 2.1,
+    minFontSize: preset.multiline ? 0.72 : 0.82,
+    autoFit: true,
+    fontWeight: 700,
+    color: '#07347a',
+    align: 'left',
+    uppercase: preset.uppercase ?? true,
+    multiline: preset.multiline ?? false,
+    visible: true,
+    required: preset.required ?? false,
+    maxLength: preset.maxLength,
+    format: preset.format ?? 'plain',
+    fixedText: preset.type === 'fixed_text' ? preset.placeholder : undefined,
     placeholder: preset.placeholder,
   };
+}
+
+function replaceDetectedFields(current: TemplateField[], detected: TemplateField[], sides: TemplateSide[]) {
+  const preserved = current.filter((field) => !(field.autoDetected && sides.includes(field.side)));
+  const manualKeys = new Set(preserved.map((field) => `${field.side}:${field.key}`));
+  return [...preserved, ...detected.filter((field) => !manualKeys.has(`${field.side}:${field.key}`))];
 }
 
 export function TemplateEditor({ initialSetup = false }: { initialSetup?: boolean }) {
@@ -35,38 +59,93 @@ export function TemplateEditor({ initialSetup = false }: { initialSetup?: boolea
   const [mode, setMode] = useState<SourceSplitMode>('automatic');
   const [file, setFile] = useState<File>();
   const [busy, setBusy] = useState(false);
+  const [detecting, setDetecting] = useState(false);
+  const [detectionProgress, setDetectionProgress] = useState<DetectionProgress>();
   const [message, setMessage] = useState('');
   const jsonRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { void loadActiveTemplate().then((saved) => { if (saved) setTemplate(saved); }); }, []);
   const selected = useMemo(() => template.fields.find((field) => field.id === selectedId), [template.fields, selectedId]);
+  const detectedCount = useMemo(() => template.fields.filter((field) => field.autoDetected).length, [template.fields]);
   const patchTemplate = (patch: Partial<CardTemplateDefinition>) => setTemplate((current) => ({ ...current, ...patch, updatedAt: new Date().toISOString() }));
   const patchField = (fieldId: string, patch: Partial<TemplateField>) => setTemplate((current) => ({
-    ...current, updatedAt: new Date().toISOString(),
+    ...current,
+    updatedAt: new Date().toISOString(),
     fields: current.fields.map((field) => field.id === fieldId ? { ...field, ...patch } : field),
   }));
 
+  async function analyzeBackgrounds(backgrounds: Pick<CardTemplateDefinition, 'front' | 'back'>, sides: TemplateSide[]) {
+    setDetecting(true);
+    setDetectionProgress({ status: 'Preparando a leitura automática...', progress: 0 });
+    try {
+      const result = await detectTemplateFields(backgrounds, setDetectionProgress);
+      setTemplate((current) => ({
+        ...current,
+        fields: replaceDetectedFields(current.fields, result.fields, sides),
+        updatedAt: new Date().toISOString(),
+      }));
+      if (result.fields[0]) {
+        setSide(result.fields[0].side);
+        setSelectedId(result.fields[0].id);
+      }
+      const warning = result.warnings.length ? ` ${result.warnings.join(' ')}` : '';
+      setMessage(`${result.fields.length} campo(s) identificado(s). Os critérios e o ajuste automático das fontes foram aplicados.${warning}`);
+      return result.fields.length;
+    } catch (error) {
+      setMessage(`${error instanceof Error ? error.message : 'A leitura automática falhou.'} A arte foi preservada e os campos ainda podem ser inseridos manualmente.`);
+      return 0;
+    } finally {
+      setDetecting(false);
+    }
+  }
+
   async function process(fileToUse = file) {
     if (!fileToUse) return;
-    setBusy(true); setMessage('');
+    setBusy(true);
+    setMessage('');
+    setDetectionProgress(undefined);
     try {
       const result = await processTemplateFile(fileToUse, mode);
-      patchTemplate({ front: result.front, back: result.back });
-      setMessage(result.back
-        ? 'Arquivo original carregado. A arte foi preservada e separada em frente e verso.'
-        : 'Arquivo original carregado como frente. Envie o verso separadamente, se necessário.');
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Falha ao processar o arquivo.'); }
-    finally { setBusy(false); }
+      setTemplate((current) => ({ ...current, front: result.front, back: result.back, updatedAt: new Date().toISOString() }));
+      const sides: TemplateSide[] = result.back ? ['front', 'back'] : ['front'];
+      await analyzeBackgrounds(result, sides);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Falha ao processar o arquivo.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function setFace(faceFile: File, face: TemplateSide) {
-    setBusy(true); setMessage('');
+    setBusy(true);
+    setMessage('');
+    setDetectionProgress(undefined);
     try {
       const background = await processSingleFaceImage(faceFile);
-      patchTemplate(face === 'front' ? { front: background } : { back: background });
-      setMessage(`${face === 'front' ? 'Frente' : 'Verso'} atualizado sem alterar a arte.`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Falha ao abrir a imagem.'); }
-    finally { setBusy(false); }
+      const patch = face === 'front' ? { front: background } : { back: background };
+      setTemplate((current) => ({ ...current, ...patch, updatedAt: new Date().toISOString() }));
+      await analyzeBackgrounds(patch, [face]);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Falha ao abrir a imagem.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function detectAgain() {
+    if (!template.front && !template.back) {
+      setMessage('Envie a arte original antes de executar a identificação automática.');
+      return;
+    }
+    setBusy(true);
+    setMessage('');
+    setDetectionProgress(undefined);
+    try {
+      const sides = (['front', 'back'] as TemplateSide[]).filter((currentSide) => template[currentSide]);
+      await analyzeBackgrounds({ front: template.front, back: template.back }, sides);
+    } finally {
+      setBusy(false);
+    }
   }
 
   function add(preset: TemplateFieldPreset) {
@@ -76,7 +155,9 @@ export function TemplateEditor({ initialSetup = false }: { initialSetup?: boolea
   }
 
   function pointerStart(event: ReactPointerEvent<HTMLElement>, field: TemplateField, action: 'move' | 'resize') {
-    event.preventDefault(); event.stopPropagation(); setSelectedId(field.id);
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedId(field.id);
     const canvas = event.currentTarget.closest('[data-template-side]') as HTMLElement | null;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -104,36 +185,55 @@ export function TemplateEditor({ initialSetup = false }: { initialSetup?: boolea
   }
 
   async function save() {
-    if (!template.front) { setMessage('Envie o arquivo original da frente antes de salvar.'); return; }
+    if (!template.front) {
+      setMessage('Envie o arquivo original da frente antes de salvar.');
+      return;
+    }
     setBusy(true);
-    try { await saveActiveTemplate(template); setMessage('Modelo salvo. Os dados serão inseridos somente na camada sobre a arte original.'); }
-    catch (error) { setMessage(error instanceof Error ? error.message : 'Falha ao salvar.'); }
-    finally { setBusy(false); }
+    setDetectionProgress(undefined);
+    try {
+      await saveActiveTemplate(template);
+      setMessage('Modelo salvo. Os dados serão inseridos somente na camada sobre a arte original.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Falha ao salvar.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function publish() {
-    setBusy(true); setMessage('');
+    setBusy(true);
+    setMessage('');
+    setDetectionProgress(undefined);
     try {
       await saveActiveTemplate(template);
       const result = await publishTemplateToSupabase(template);
       const updated = { ...template, version: result.version, updatedAt: new Date().toISOString() };
-      setTemplate(updated); await saveActiveTemplate(updated);
+      setTemplate(updated);
+      await saveActiveTemplate(updated);
       setMessage(`Modelo publicado como versão ${result.version}.`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Falha ao publicar.'); }
-    finally { setBusy(false); }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Falha ao publicar.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function reset() {
     if (!confirm('Remover a configuração local do modelo?')) return;
-    await clearActiveTemplate(); setTemplate(emptyTemplate()); setSelectedId(undefined); setMessage('Configuração removida.');
+    await clearActiveTemplate();
+    setTemplate(emptyTemplate());
+    setSelectedId(undefined);
+    setMessage('Configuração removida.');
   }
 
   return <div className="space-y-6">
     <Card>
       <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div className="max-w-3xl">
-          <h2 className="text-xl font-bold">Motor de inserção de campos</h2>
-          <p className="mt-2 text-sm leading-6 text-slate-600">O arquivo enviado permanece como fundo imutável. O sistema cria somente campos por cima da arte, sem redesenhar logotipos, textos, fontes ou elementos do documento original.</p>
+          <div className="flex items-center gap-2"><Sparkles className="text-brand-700" size={21}/><h2 className="text-xl font-bold">Motor inteligente de inserção de campos</h2></div>
+          <p className="mt-2 text-sm leading-6 text-slate-600">Ao enviar a arte, o sistema lê os rótulos com OCR, identifica os campos conhecidos, aplica regras de preenchimento e calcula automaticamente o tamanho da fonte para cada valor caber no espaço.</p>
+          {detectedCount > 0 && <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-emerald-700"><CheckCircle2 size={17}/>{detectedCount} campo(s) criado(s) automaticamente.</p>}
         </div>
         <div className="flex flex-wrap gap-2">
           <input ref={jsonRef} hidden type="file" accept="application/json" onChange={(event) => {
@@ -143,59 +243,73 @@ export function TemplateEditor({ initialSetup = false }: { initialSetup?: boolea
           }} />
           <Button variant="secondary" onClick={() => jsonRef.current?.click()}><FileJson size={17}/> Importar</Button>
           <Button variant="secondary" disabled={!template.front} onClick={() => downloadTemplateJson(template)}><Download size={17}/> Exportar</Button>
+          <Button variant="secondary" disabled={busy || (!template.front && !template.back)} onClick={() => void detectAgain()}><ScanSearch size={17}/> Detectar novamente</Button>
           <Button disabled={busy} onClick={() => void save()}><Save size={17}/> Salvar modelo</Button>
           {configured && user && roles.includes('administrator') && <Button disabled={busy || !template.front || !template.back} onClick={() => void publish()}><CloudUpload size={17}/> Publicar</Button>}
         </div>
       </div>
-      {message && <p className="mt-4 rounded-lg bg-sky-50 px-4 py-3 text-sm text-sky-900">{message}</p>}
+      {busy && detectionProgress && <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 p-4">
+        <div className="flex items-center gap-3 text-sm font-semibold text-sky-900"><LoaderCircle className="animate-spin" size={18}/><span>{detectionProgress.status}</span><span className="ml-auto">{Math.round(detectionProgress.progress * 100)}%</span></div>
+        <div className="mt-3 h-2 overflow-hidden rounded-full bg-sky-100"><div className="h-full rounded-full bg-sky-600 transition-all" style={{ width: `${Math.round(detectionProgress.progress * 100)}%` }}/></div>
+      </div>}
+      {message && <p className={`mt-4 rounded-lg px-4 py-3 text-sm ${message.includes('falh') || message.includes('Falh') ? 'bg-amber-50 text-amber-900' : 'bg-sky-50 text-sky-900'}`}>{message}</p>}
     </Card>
 
     <div className="grid gap-6 xl:grid-cols-[330px_minmax(0,1fr)_340px]">
       <div className="space-y-6">
         <Card>
           <h3 className="font-bold">1. Arquivo original</h3>
+          <p className="mt-1 text-sm text-slate-600">A identificação começa automaticamente após o envio.</p>
           <Field label="Nome do modelo"><Input value={template.name} onChange={(event) => patchTemplate({ name: event.target.value })}/></Field>
           <div className="mt-4"><Field label="Como separar o arquivo">
             <Select value={mode} onChange={(event) => setMode(event.target.value as SourceSplitMode)}>
               <option value="automatic">Detectar automaticamente</option><option value="vertical">Frente à esquerda e verso à direita</option><option value="horizontal">Frente acima e verso abaixo</option><option value="full">Usar página inteira</option>
             </Select>
           </Field></div>
-          <label className="mt-4 grid cursor-pointer place-items-center rounded-xl border-2 border-dashed border-slate-300 p-6 text-center hover:bg-slate-50">
+          <label className={`mt-4 grid place-items-center rounded-xl border-2 border-dashed border-slate-300 p-6 text-center hover:bg-slate-50 ${busy ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
             <Upload size={28} className="text-brand-700"/><span className="mt-2 text-sm font-semibold">Selecionar PDF, PNG, JPG ou WEBP</span><span className="text-xs text-slate-500">Máximo de 15 MB</span>
-            <input hidden type="file" accept="application/pdf,image/png,image/jpeg,image/webp" onChange={(event) => { const next = event.target.files?.[0]; if (next) { setFile(next); void process(next); } event.currentTarget.value = ''; }}/>
+            <input disabled={busy} hidden type="file" accept="application/pdf,image/png,image/jpeg,image/webp" onChange={(event) => { const next = event.target.files?.[0]; if (next) { setFile(next); void process(next); } event.currentTarget.value = ''; }}/>
           </label>
           <div className="mt-3 grid grid-cols-2 gap-2">
-            {(['front','back'] as TemplateSide[]).map((face) => <label key={face} className="cursor-pointer rounded-lg border border-slate-300 px-3 py-2 text-center text-sm font-semibold hover:bg-slate-50">Trocar {face === 'front' ? 'frente' : 'verso'}<input hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { const next = event.target.files?.[0]; if (next) void setFace(next, face); event.currentTarget.value = ''; }}/></label>)}
+            {(['front','back'] as TemplateSide[]).map((face) => <label key={face} className={`rounded-lg border border-slate-300 px-3 py-2 text-center text-sm font-semibold hover:bg-slate-50 ${busy ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>Trocar {face === 'front' ? 'frente' : 'verso'}<input disabled={busy} hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { const next = event.target.files?.[0]; if (next) void setFace(next, face); event.currentTarget.value = ''; }}/></label>)}
           </div>
         </Card>
         <Card>
           <h3 className="font-bold">2. Campos a preencher</h3>
-          <p className="mt-1 text-sm text-slate-600">Escolha a face e clique no dado que deseja inserir.</p>
+          <p className="mt-1 text-sm text-slate-600">Os campos detectados aparecem na arte. Use esta lista apenas para acrescentar dados que não foram reconhecidos.</p>
           <div className="mt-3 flex rounded-lg border p-1"><button type="button" className={`flex-1 rounded-md py-2 text-sm font-semibold ${side === 'front' ? 'bg-brand-900 text-white' : ''}`} onClick={() => setSide('front')}>Frente</button><button type="button" className={`flex-1 rounded-md py-2 text-sm font-semibold ${side === 'back' ? 'bg-brand-900 text-white' : ''}`} onClick={() => setSide('back')}>Verso</button></div>
           <div className="mt-3 max-h-[480px] space-y-2 overflow-auto">{FIELD_PRESETS.map((preset, index) => <button type="button" key={`${preset.key}-${index}`} onClick={() => add(preset)} className="flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left text-sm hover:border-sky-400 hover:bg-sky-50"><span>{preset.label}</span><Plus size={16}/></button>)}</div>
         </Card>
       </div>
 
       <Card className="min-w-0">
-        <div className="mb-4"><h3 className="font-bold">3. Posicione os campos</h3><p className="text-sm text-slate-600">Arraste para mover e use o quadrado azul para redimensionar.</p></div>
+        <div className="mb-4"><h3 className="font-bold">3. Revise o posicionamento automático</h3><p className="text-sm text-slate-600">Os campos são posicionados perto dos rótulos reconhecidos. Arraste para corrigir e use o quadrado azul para redimensionar.</p></div>
         <div className="mx-auto max-w-3xl overflow-hidden rounded-xl border bg-slate-100" onClick={() => setSelectedId(undefined)}>
           <TemplateRenderer template={template} side={side} values={SAMPLE_TEMPLATE_VALUES} editMode selectedFieldId={selectedId} onSelectField={setSelectedId} onPointerDown={pointerStart}/>
         </div>
       </Card>
 
       <div className="space-y-6"><Card>
-        <h3 className="font-bold">4. Propriedades do campo</h3>
+        <h3 className="font-bold">4. Critérios do campo</h3>
         {!selected ? <p className="mt-3 text-sm text-slate-600">Selecione um campo na arte.</p> : <div className="mt-4 space-y-4">
+          {selected.autoDetected && <div className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-900"><strong>Detectado automaticamente</strong><br/>Rótulo lido: {selected.detectedLabel || '—'}<br/>Confiança do OCR: {Math.round(selected.detectionConfidence || 0)}%</div>}
           <Field label="Rótulo"><Input value={selected.label} onChange={(event) => patchField(selected.id, { label: event.target.value })}/></Field>
-          <Field label="Dado preenchido"><Select value={selected.key} onChange={(event) => { const preset = FIELD_PRESETS.find((item) => item.key === event.target.value); patchField(selected.id, { key: event.target.value, type: preset?.type ?? selected.type, placeholder: preset?.placeholder ?? selected.placeholder }); }}>{FIELD_PRESETS.map((preset,index) => <option key={`${preset.key}-${index}`} value={preset.key}>{preset.label}</option>)}</Select></Field>
+          <Field label="Dado preenchido"><Select value={selected.key} onChange={(event) => { const preset = FIELD_PRESETS.find((item) => item.key === event.target.value); patchField(selected.id, { key: event.target.value, type: preset?.type ?? selected.type, placeholder: preset?.placeholder ?? selected.placeholder, required: preset?.required ?? selected.required, maxLength: preset?.maxLength ?? selected.maxLength, format: preset?.format ?? selected.format }); }}>{FIELD_PRESETS.map((preset,index) => <option key={`${preset.key}-${index}`} value={preset.key}>{preset.label}</option>)}</Select></Field>
           <div className="grid grid-cols-2 gap-3"><Field label="Face"><Select value={selected.side} onChange={(event) => patchField(selected.id,{ side:event.target.value as TemplateSide })}><option value="front">Frente</option><option value="back">Verso</option></Select></Field><Field label="Tipo"><Select value={selected.type} onChange={(event) => patchField(selected.id,{ type:event.target.value as TemplateField['type'] })}><option value="text">Texto</option><option value="fixed_text">Texto fixo</option><option value="image">Foto</option><option value="qrcode">QR Code</option></Select></Field></div>
           {selected.type === 'fixed_text' && <Field label="Texto fixo"><Textarea value={selected.fixedText || ''} onChange={(event) => patchField(selected.id,{ fixedText:event.target.value })}/></Field>}
           <div className="grid grid-cols-2 gap-3"><Field label="X (%)"><Input type="number" value={selected.x} onChange={(event) => patchField(selected.id,{x:Number(event.target.value)})}/></Field><Field label="Y (%)"><Input type="number" value={selected.y} onChange={(event) => patchField(selected.id,{y:Number(event.target.value)})}/></Field><Field label="Largura (%)"><Input type="number" value={selected.width} onChange={(event) => patchField(selected.id,{width:Number(event.target.value)})}/></Field><Field label="Altura (%)"><Input type="number" value={selected.height} onChange={(event) => patchField(selected.id,{height:Number(event.target.value)})}/></Field></div>
-          {(selected.type === 'text' || selected.type === 'fixed_text') && <><div className="grid grid-cols-2 gap-3"><Field label="Tamanho"><Input type="number" step="0.1" value={selected.fontSize} onChange={(event) => patchField(selected.id,{fontSize:Number(event.target.value)})}/></Field><Field label="Cor"><Input type="color" value={selected.color} onChange={(event) => patchField(selected.id,{color:event.target.value})}/></Field><Field label="Peso"><Select value={selected.fontWeight} onChange={(event) => patchField(selected.id,{fontWeight:Number(event.target.value) as TemplateField['fontWeight']})}><option value="400">Normal</option><option value="600">Seminegrito</option><option value="700">Negrito</option><option value="800">Extra negrito</option></Select></Field><Field label="Alinhamento"><Select value={selected.align} onChange={(event) => patchField(selected.id,{align:event.target.value as TemplateField['align']})}><option value="left">Esquerda</option><option value="center">Centro</option><option value="right">Direita</option></Select></Field></div><label className="flex gap-2 text-sm"><input type="checkbox" checked={selected.uppercase} onChange={(event) => patchField(selected.id,{uppercase:event.target.checked})}/> Maiúsculas</label><label className="flex gap-2 text-sm"><input type="checkbox" checked={selected.multiline} onChange={(event) => patchField(selected.id,{multiline:event.target.checked})}/> Múltiplas linhas</label></>}
+          {(selected.type === 'text' || selected.type === 'fixed_text') && <>
+            <div className="grid grid-cols-2 gap-3"><Field label="Tamanho máximo"><Input type="number" step="0.1" value={selected.fontSize} onChange={(event) => patchField(selected.id,{fontSize:Number(event.target.value)})}/></Field><Field label="Tamanho mínimo"><Input type="number" step="0.1" value={selected.minFontSize ?? 0.8} onChange={(event) => patchField(selected.id,{minFontSize:Number(event.target.value)})}/></Field><Field label="Cor"><Input type="color" value={selected.color} onChange={(event) => patchField(selected.id,{color:event.target.value})}/></Field><Field label="Peso"><Select value={selected.fontWeight} onChange={(event) => patchField(selected.id,{fontWeight:Number(event.target.value) as TemplateField['fontWeight']})}><option value="400">Normal</option><option value="600">Seminegrito</option><option value="700">Negrito</option><option value="800">Extra negrito</option></Select></Field><Field label="Alinhamento"><Select value={selected.align} onChange={(event) => patchField(selected.id,{align:event.target.value as TemplateField['align']})}><option value="left">Esquerda</option><option value="center">Centro</option><option value="right">Direita</option></Select></Field><Field label="Formato"><Select value={selected.format ?? 'plain'} onChange={(event) => patchField(selected.id,{format:event.target.value as TemplateField['format']})}><option value="plain">Texto</option><option value="date">Data</option><option value="phone">Telefone</option><option value="sus">Cartão SUS</option><option value="cid">CID</option><option value="single_character">Caractere único</option><option value="card_number">Número CIPTEA</option><option value="support_level">Nível de suporte</option></Select></Field></div>
+            <Field label="Limite de caracteres"><Input type="number" min="1" value={selected.maxLength ?? ''} onChange={(event) => patchField(selected.id,{maxLength:event.target.value ? Number(event.target.value) : undefined})}/></Field>
+            <label className="flex gap-2 text-sm"><input type="checkbox" checked={selected.autoFit !== false} onChange={(event) => patchField(selected.id,{autoFit:event.target.checked})}/> Ajustar tamanho da fonte automaticamente</label>
+            <label className="flex gap-2 text-sm"><input type="checkbox" checked={selected.uppercase} onChange={(event) => patchField(selected.id,{uppercase:event.target.checked})}/> Maiúsculas</label>
+            <label className="flex gap-2 text-sm"><input type="checkbox" checked={selected.multiline} onChange={(event) => patchField(selected.id,{multiline:event.target.checked})}/> Múltiplas linhas</label>
+          </>}
+          <label className="flex gap-2 text-sm"><input type="checkbox" checked={selected.required ?? false} onChange={(event) => patchField(selected.id,{required:event.target.checked})}/> Campo obrigatório</label>
           <Button className="w-full" variant="danger" onClick={() => { setTemplate((current) => ({...current, fields:current.fields.filter((field) => field.id !== selected.id)})); setSelectedId(undefined); }}><Trash2 size={17}/> Excluir campo</Button>
         </div>}
       </Card>
-      <Card><h3 className="font-bold">Proteção da arte</h3><ul className="mt-3 space-y-2 text-sm text-slate-600"><li>• O fundo original não é editado.</li><li>• Campos e arte ficam separados.</li><li>• Dados pessoais não são gravados no arquivo-base.</li><li>• A configuração pode ser exportada em JSON.</li></ul>{!initialSetup && <Button className="mt-4 w-full" variant="secondary" onClick={() => void reset()}><Trash2 size={17}/> Limpar modelo</Button>}</Card></div>
+      <Card><h3 className="font-bold">Automação aplicada</h3><ul className="mt-3 space-y-2 text-sm text-slate-600"><li>• OCR em português identifica os rótulos.</li><li>• Tipo, obrigatoriedade, formato e limite são sugeridos.</li><li>• A fonte diminui até o texto caber no campo.</li><li>• A arte original permanece imutável.</li></ul>{!initialSetup && <Button className="mt-4 w-full" variant="secondary" onClick={() => void reset()}><Trash2 size={17}/> Limpar modelo</Button>}</Card></div>
     </div>
   </div>;
 }
