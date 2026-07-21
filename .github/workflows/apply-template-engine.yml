@@ -1,0 +1,48 @@
+name: Aplicar motor de campos CIPTEA
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - bootstrap-template-engine-20260721/READY
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-template-engine-ciptea
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar repositório
+        uses: actions/checkout@v4
+
+      - name: Reconstruir atualização
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f bootstrap-template-engine-20260721/READY
+          test "$(find bootstrap-template-engine-20260721 -maxdepth 1 -type f -name 'part*' | wc -l)" -eq 9
+          cat bootstrap-template-engine-20260721/part* | base64 --decode > /tmp/ciptea-template-engine.tar.gz
+          gzip -t /tmp/ciptea-template-engine.tar.gz
+
+      - name: Aplicar arquivos
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xzf /tmp/ciptea-template-engine.tar.gz -C .
+          rm -rf bootstrap-template-engine-20260721
+          rm -f .github/workflows/apply-template-engine.yml
+
+      - name: Publicar atualização
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: adicionar motor configurável de inserção de campos"
+          git push origin main
