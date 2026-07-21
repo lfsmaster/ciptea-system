@@ -74,8 +74,10 @@ export async function publishTemplateToSupabase(template: CardTemplateDefinition
       width_mm: 85.6,
       height_mm: 132.5,
       config: {
-        engine: 'overlay-v1',
+        engine: 'overlay-v2-ocr-autofit',
         source_names: { front: template.front.sourceName, back: template.back.sourceName },
+        automatic_detection: true,
+        automatic_font_fit: true,
       },
       published_at: new Date().toISOString(),
     })
@@ -95,6 +97,8 @@ export async function publishTemplateToSupabase(template: CardTemplateDefinition
     height: field.height,
     style: {
       fontSize: field.fontSize,
+      minFontSize: field.minFontSize ?? 0.8,
+      autoFit: field.autoFit !== false,
       fontWeight: field.fontWeight,
       color: field.color,
       align: field.align,
@@ -102,9 +106,15 @@ export async function publishTemplateToSupabase(template: CardTemplateDefinition
       multiline: field.multiline,
       fixedText: field.fixedText,
       placeholder: field.placeholder,
+      autoDetected: field.autoDetected ?? false,
+      detectionConfidence: field.detectionConfidence,
+      detectedLabel: field.detectedLabel,
     },
-    validation: {},
-    required: false,
+    validation: {
+      format: field.format ?? 'plain',
+      maxLength: field.maxLength,
+    },
+    required: field.required ?? false,
     visible: field.visible,
   }));
   if (rows.length) {
